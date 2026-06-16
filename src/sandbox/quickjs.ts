@@ -99,7 +99,7 @@ export async function createQuickJSSandbox(): Promise<Sandbox> {
 					return {
 						logs,
 						calls,
-						timedOut: /timeout|interrupted/i.test(message),
+						timedOut: isTimeoutError(message),
 						error: { message, stack: result.error?.stack },
 						durationMs: Date.now() - startedAt,
 					};
@@ -117,13 +117,17 @@ export async function createQuickJSSandbox(): Promise<Sandbox> {
 				return {
 					logs,
 					calls,
-					timedOut: /timeout|interrupted/i.test(error.message),
+					timedOut: isTimeoutError(error.message),
 					error: { message: error.message, stack: error.stack },
 					durationMs: Date.now() - startedAt,
 				};
 			}
 		},
 	};
+}
+
+function isTimeoutError(message: string): boolean {
+	return /timeout|timed out|time limit|interrupted|exceeded.*time/i.test(message);
 }
 
 function stringify(value: unknown): string {

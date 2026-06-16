@@ -1,6 +1,7 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
+import { toJsonCompatible } from "../json.js";
 import type {
 	Sandbox,
 	SandboxCallRecord,
@@ -74,11 +75,17 @@ function runInWorker(options: SandboxRunOptions): Promise<SandboxResult> {
 			}
 			if (msg.kind === "call") {
 				const callStart = Date.now();
+				let safeArgs: Record<string, unknown> = {};
 				try {
-					const result = await options.invoke(msg.tool, msg.args);
+					safeArgs = toJsonCompatible(
+						msg.args,
+						`arguments for tool '${msg.tool}'`,
+					) as Record<string, unknown>;
+					const invoked = await options.invoke(msg.tool, safeArgs);
+					const result = toJsonCompatible(invoked, `result from tool '${msg.tool}'`);
 					calls.push({
 						tool: msg.tool,
-						args: msg.args,
+						args: safeArgs,
 						result,
 						startedAt: callStart,
 						durationMs: Date.now() - callStart,
@@ -92,7 +99,7 @@ function runInWorker(options: SandboxRunOptions): Promise<SandboxResult> {
 					const message = error instanceof Error ? error.message : String(error);
 					calls.push({
 						tool: msg.tool,
-						args: msg.args,
+						args: safeArgs,
 						error: message,
 						startedAt: callStart,
 						durationMs: Date.now() - callStart,
@@ -107,11 +114,18 @@ function runInWorker(options: SandboxRunOptions): Promise<SandboxResult> {
 			}
 			if (msg.kind === "done") {
 				if (settled) return;
+				let value: unknown;
+				try {
+					value = toJsonCompatible(msg.value, "execute return value");
+				} catch (error) {
+					finishError(error instanceof Error ? error : new Error(String(error)));
+					return;
+				}
 				settled = true;
 				clearTimeout(timer);
 				worker.terminate().catch(() => {});
 				resolvePromise({
-					value: msg.value,
+					value,
 					logs,
 					calls,
 					timedOut: false,

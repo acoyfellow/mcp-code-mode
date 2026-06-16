@@ -59,11 +59,12 @@ native `create_note` tool.
 
 | Piece                          | What it does                                                                 |
 |--------------------------------|------------------------------------------------------------------------------|
-| `withCodeMode(inputs, opts)`   | Transport-agnostic wrap. Takes `{listTools, callTool, register}`.            |
-| `wrapServer(server, kit, opts)`| Convenience for `@modelcontextprotocol/sdk` users. Patches the Server in place. |
-| `createWorkerSandbox()`        | Default sandbox. `node:worker_threads` based. No native deps.                |
-| `createQuickJSSandbox()`       | Optional sandbox. `@sebastianwessel/quickjs`. True caps, no Node globals.    |
-| `searchCatalog(tools, q)`      | Tiny keyword ranker. Swap in your own if you want embeddings.                |
+| `withCodeMode(inputs, opts)` | Node/Bun wrap with a default disposable-worker sandbox. |
+| `createCodeMode(inputs, opts)` | Runtime-neutral core for Workers, Deno, or a custom host-provided sandbox. |
+| `wrapServer(server, kit, opts)` | MCP SDK convenience wrapper; patches the Server in place. |
+| `createWorkerSandbox()` | Default Node sandbox: disposable worker plus contextified VM. |
+| `createQuickJSSandbox()` | Optional separate-engine sandbox using QuickJS-WASM. |
+| `searchCatalog(tools, q)` | Weighted lexical ranker; replaceable through `searchTool.handler`. |
 
 ## What `execute()` actually runs
 
@@ -81,6 +82,8 @@ Use QuickJS when the code author is an untrusted principal.
 const component = (await tools.search_catalog({ kind: "Component", name: "my-svc" })).items[0];
 const owner     = (await tools.get_groups({ name: component.spec.owner })).items[0];
 const reports   = await tools.get_direct_reports({ user: owner.spec.profile.email });
+// Raw names that contain hyphens use bracket notation:
+// await tools["service-mcp_get_record"]({ id: "42" });
 console.log(`${reports.length} reports for ${owner.metadata.name}`);
 return reports.map(r => r.spec.profile.email);
 ```
@@ -142,8 +145,26 @@ wrapServer(server, toolkit, {
 | worker_threads + VM | ~5ms | host-managed | outer worker termination | none | First-party / agent-generated code |
 | QuickJS-WASM | ~25ms | engine-enforced | engine interrupt | optional dependencies | Untrusted code, strict boundaries |
 
-Both implement the same `Sandbox` interface, so you can write your own —
-`isolated-vm`, Deno, Workers, whatever — and pass it in.
+Both implement the same `Sandbox` interface. For a non-Node runtime, import the
+runtime-neutral entry and provide the host's executor:
+
+```ts
+import { createCodeMode } from "mcp-code-mode/core";
+
+const handlers = createCodeMode(
+  { listTools, callTool },
+  {
+    sandbox: workerLoaderSandbox,
+    // Prefer a positive read/composition allowlist when the upstream catalog
+    // does not provide reliable destructive-action annotations.
+    expose: (name) => readOnlyTools.has(name),
+  },
+);
+```
+
+`mcp-code-mode/core` bundles without Node built-ins; CI verifies this. A custom
+sandbox can use Worker Loaders, Deno, `isolated-vm`, or another capability
+boundary.
 
 ## Why a library and not a gateway
 
@@ -159,6 +180,26 @@ MCP.
 
 Use [forgemax](https://github.com/postrv/forgemax) when you can't modify the
 servers. Use this when you can.
+
+## Operational limits
+
+- **Classify capabilities, not names.** `keepNative` is presentation policy, not
+  authorization. Prefer an explicit `expose` allowlist for read/composition
+  tools. Every underlying dispatcher must still authenticate, authorize, and
+  validate each call.
+- **Timeout is not cancellation.** Terminating guest JavaScript cannot undo or
+  abort a downstream tool call that already started. Keep writes, payments,
+  notifications, deploys, and other consequential calls native unless the
+  downstream API supplies its own cancellation/idempotency contract.
+- **Limit host concurrency.** The default creates one V8 worker per execution.
+  It is fast, but hundreds of simultaneous executions consume substantial
+  memory. Apply a queue/semaphore at the server boundary or use a pooled custom
+  sandbox.
+- **Return JSON.** Tool arguments, tool results, and the final value must be
+  JSON-compatible. Cycles, functions, and BigInt values are rejected.
+
+Run the repeatable local load probe with `bun run stress`; raise worker pressure
+with `STRESS_CONCURRENCY=200 bun run stress`.
 
 ## Status
 

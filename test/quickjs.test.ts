@@ -20,6 +20,19 @@ test("QuickJS bridges tools, captures logs, and returns a value", async () => {
 	expect(result.calls.map((call) => call.tool)).toEqual(["add"]);
 });
 
+test("QuickJS classifies execution time limits as timeouts", async () => {
+	const sandbox = await createQuickJSSandbox();
+	const result = await sandbox.run({
+		code: `while (true) {}`,
+		timeoutMs: 100,
+		expose: [],
+		invoke: async () => undefined,
+	});
+
+	expect(result.timedOut).toBe(true);
+	expect(result.error?.message).toMatch(/time/i);
+});
+
 test("QuickJS does not expose Node or network globals", async () => {
 	const sandbox = await createQuickJSSandbox();
 	const result = await sandbox.run({

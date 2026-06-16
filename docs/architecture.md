@@ -4,6 +4,11 @@ A wrapped MCP server, with one synthetic `search` tool, one synthetic `execute`
 tool, an optional pass-through list of "keep native" tools, and a sandbox
 behind `execute()` that brokers calls back to the underlying tool implementations.
 
+The package has two layers:
+
+- `mcp-code-mode/core` is runtime-neutral and requires a host-provided sandbox;
+- the main Node/Bun entry adds the default worker sandbox and MCP SDK adapter.
+
 ```text
    ┌──────────────────────────┐         tools/list ──► [search, execute, ...keepNative]
    │       LLM harness        │ ──────► tools/call(search,  query) ─┐
@@ -85,8 +90,10 @@ Most servers want to flip a small handful of write-side-effect tools into
 
 - Fresh worker plus contextified V8 VM per `execute()` call. No shared state.
 - The runner is dependency-free; it accepts a `code` string + an `expose` list.
-- Inside: a frozen `tools` object whose methods bridge to the parent over
-  MessagePort, plus a captured `console` object.
+- VM-realm `tools` and `console` wrappers capture a single host bridge, then
+  remove that bridge from `globalThis` before user code starts.
+- Calls cross the bridge as JSON strings so host-realm functions, Promises, and
+  returned object constructors are not exposed as VM escape gadgets.
 - No `require`, `process`, `fs`, `Buffer`, or network globals. String and WASM
   code generation are disabled in the VM context.
 - Hard timeout terminates the outer worker. A tight `while(true){}` burns one
@@ -142,3 +149,11 @@ single MCP.
 
 Both shapes coexist. Use a gateway when you can't modify the servers. Use
 this library when you can.
+
+## Cancellation and side effects
+
+The sandbox timeout bounds guest execution, not downstream work. Once a tool
+call crosses into the server dispatcher, terminating the guest cannot undo or
+necessarily abort it. `expose` should therefore be a positive capability
+allowlist; consequential tools should remain native and enforce authorization,
+idempotency, and cancellation in their own implementation.

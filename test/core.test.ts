@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createWorkerSandbox, withCodeMode } from "../src/index.js";
+import { createWorkerSandbox, searchCatalog, withCodeMode } from "../src/index.js";
 import type { ToolCallResult, ToolSchema, WrapInputs } from "../src/index.js";
 
 const tools: ToolSchema[] = [
@@ -43,6 +43,21 @@ function harness() {
 	);
 	return handlers;
 }
+
+describe("searchCatalog", () => {
+	test("splits namespaced tool names and normalizes simple plurals", () => {
+		const catalog: ToolSchema[] = [
+			{ name: "google-workspace-mcp_chat_search_messages" },
+			{ name: "gitlab-mcp-server_get_job_log" },
+		];
+		expect(searchCatalog(catalog, "find chat messages", 5).map((tool) => tool.name)).toEqual([
+			"google-workspace-mcp_chat_search_messages",
+		]);
+		expect(searchCatalog(catalog, "failed job logs", 5).map((tool) => tool.name)).toEqual([
+			"gitlab-mcp-server_get_job_log",
+		]);
+	});
+});
 
 describe("withCodeMode", () => {
 	test("collapses the catalog and keeps explicit tools native", async () => {
@@ -165,25 +180,50 @@ describe("worker sandbox", () => {
 		});
 	});
 
-	test("blocks Function-constructor escapes", async () => {
-		const result = await createWorkerSandbox().run({
-			code: `return (() => {}).constructor("return process")();`,
-			timeoutMs: 1_000,
-			expose: [],
-			invoke: async () => undefined,
-		});
-		expect(result.error?.message).toContain("Code generation from strings disallowed");
+	test("blocks VM and injected-capability constructor escapes", async () => {
+		for (const code of [
+			`return (() => {}).constructor("return process")();`,
+			`return console.log.constructor("return process")();`,
+			`return tools.echo.constructor("return process")();`,
+			`const result = await tools.echo({}); return result.constructor.constructor("return process")();`,
+		]) {
+			const result = await createWorkerSandbox().run({
+				code,
+				timeoutMs: 1_000,
+				expose: ["echo"],
+				invoke: async () => ({ ok: true }),
+			});
+			expect(result.value).toBeUndefined();
+			expect(result.error?.message).toMatch(/Code generation from strings disallowed|not a function/);
+		}
 	});
 
-	test("reports uncloneable tool results instead of hanging", async () => {
+	test("rejects non-JSON tool results instead of hanging", async () => {
 		const result = await createWorkerSandbox().run({
 			code: `return tools.bad_result({});`,
 			timeoutMs: 1_000,
 			expose: ["bad_result"],
-			invoke: async () => ({ callback: () => undefined }),
+			invoke: async () => ({ value: 42n }),
 		});
 		expect(result.timedOut).toBe(false);
-		expect(result.error?.message).toMatch(/clone|function/i);
+		expect(result.error?.message).toMatch(/JSON-compatible|BigInt/i);
+	});
+
+	test("rejects cyclic and BigInt execute return values", async () => {
+		const cyclic = await createWorkerSandbox().run({
+			code: `const value = {}; value.self = value; return value;`,
+			timeoutMs: 1_000,
+			expose: [],
+			invoke: async () => undefined,
+		});
+		const bigint = await createWorkerSandbox().run({
+			code: `return 42n;`,
+			timeoutMs: 1_000,
+			expose: [],
+			invoke: async () => undefined,
+		});
+		expect(cyclic.error?.message).toContain("execute return value must be JSON-compatible");
+		expect(bigint.error?.message).toContain("execute return value must be JSON-compatible");
 	});
 
 	test("terminates runaway code", async () => {
