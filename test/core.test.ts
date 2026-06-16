@@ -44,7 +44,7 @@ function harness(options: WithCodeModeOptions = {}) {
 				handlers = registered;
 			},
 		},
-		{ keepNative: ["delete_record"], ...options },
+		{ expose: ["echo", "add"], keepNative: ["delete_record"], ...options },
 	);
 	return handlers;
 }
@@ -65,6 +65,10 @@ describe("searchCatalog", () => {
 });
 
 describe("withCodeMode", () => {
+	test("fails closed without an exposure policy", () => {
+		expect(() => harness({ expose: undefined })).toThrow("Code Mode is fail-closed");
+	});
+
 	test("collapses the catalog and keeps explicit tools native", async () => {
 		const listed = await harness().listTools();
 		expect(listed.tools.map((tool) => tool.name)).toEqual(["search", "execute", "delete_record"]);
@@ -151,6 +155,7 @@ describe("withCodeMode", () => {
 				},
 			},
 			{
+				expose: ["echo", "add"],
 				searchTool: {
 					handler: (catalog, _query, limit) => {
 						receivedLimit = limit;
@@ -165,15 +170,72 @@ describe("withCodeMode", () => {
 		expect(receivedLimit).toBe(50);
 	});
 
-	test("rejects collisions with synthetic tool names", async () => {
-		let handlers!: Parameters<WrapInputs["register"]>[0];
-		withCodeMode({
-			listTools: async () => [{ name: "execute", description: "A real underlying tool." }],
-			callTool: async () => ok({}),
-			register: (registered) => {
-				handlers = registered;
+	test("enforces code, call, log, and result budgets", async () => {
+		const oversizedCode = await harness({ limits: { maxCodeBytes: 16 } }).callTool({
+			params: { name: "execute", arguments: { code: "return 'this is too large';" } },
+		});
+		expect(oversizedCode.isError).toBe(true);
+		expect((oversizedCode.structuredContent as { error: { message: string } }).error.message).toContain("maxCodeBytes");
+
+		const tooManyCalls = await harness({ limits: { maxToolCalls: 1 } }).callTool({
+			params: {
+				name: "execute",
+				arguments: { code: "await tools.add({a:1,b:1}); return tools.add({a:2,b:2});" },
 			},
 		});
+		expect((tooManyCalls.structuredContent as { error: { message: string } }).error.message).toContain("tool call budget");
+
+		const tooManyLogs = await harness({ limits: { maxLogBytes: 8 } }).callTool({
+			params: { name: "execute", arguments: { code: "console.log('0123456789'); return true;" } },
+		});
+		expect((tooManyLogs.structuredContent as { error: { message: string } }).error.message).toContain("maxLogBytes");
+
+		const oversizedResult = await harness({ limits: { maxResultBytes: 8 } }).callTool({
+			params: { name: "execute", arguments: { code: "return { value: '0123456789' };" } },
+		});
+		expect((oversizedResult.structuredContent as { error: { message: string } }).error.message).toContain("maxResultBytes");
+	});
+
+	test("enforces concurrent child call budget", async () => {
+		let handlers!: Parameters<WrapInputs["register"]>[0];
+		withCodeMode(
+			{
+				listTools: async () => [tools[1]!],
+				callTool: async () => {
+					await new Promise((resolve) => setTimeout(resolve, 25));
+					return ok({ sum: 2 });
+				},
+				register: (registered) => {
+					handlers = registered;
+				},
+			},
+			{ expose: ["add"], limits: { maxConcurrentCalls: 1 } },
+		);
+		const result = await handlers.callTool({
+			params: {
+				name: "execute",
+				arguments: {
+					code: "return Promise.all([tools.add({a:1,b:1}), tools.add({a:1,b:1})]);",
+				},
+			},
+		});
+		expect((result.structuredContent as { error: { message: string } }).error.message).toContain(
+			"concurrent tool call budget",
+		);
+	});
+
+	test("rejects collisions with synthetic tool names", async () => {
+		let handlers!: Parameters<WrapInputs["register"]>[0];
+		withCodeMode(
+			{
+				listTools: async () => [{ name: "execute", description: "A real underlying tool." }],
+				callTool: async () => ok({}),
+				register: (registered) => {
+					handlers = registered;
+				},
+			},
+			{ unsafeExposeAll: true },
+		);
 		expect(handlers.listTools()).rejects.toThrow("collides with a synthetic code-mode tool");
 	});
 });

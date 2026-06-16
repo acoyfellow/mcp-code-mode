@@ -1,7 +1,7 @@
 {
   "name": "mcp-code-mode",
   "version": "0.0.1",
-  "description": "Wrap any MCP server so it exposes search + execute instead of N tools. The agent writes JavaScript; the sandbox calls the tools.",
+  "description": "Wrap a Node/Bun MCP server with fail-closed search and sandboxed multi-tool execution.",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -58,7 +58,8 @@
     "check:worker": "node scripts/check-worker.mjs",
     "test": "bun test",
     "test:node": "node examples/node-smoke.mjs",
-    "verify": "bun run check && bun run check:worker && bun test && bun run build && bun run test:node && npm pack --dry-run",
+    "prove:consumer": "node scripts/prove-packed-consumer.mjs",
+    "verify": "bun run check && bun run check:worker && bun test && bun run build && bun run test:node && bun run prove:consumer && npm pack --dry-run",
     "demo": "bun examples/echo-server/index.ts",
     "stress": "bun run build && node bench/stress.mjs",
     "play": "npx --yes @modelcontextprotocol/inspector@0.22.0 bun examples/mcp-server/index.ts",

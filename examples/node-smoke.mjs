@@ -18,6 +18,8 @@ withCodeMode({
   register: (value) => {
     handlers = value;
   },
+}, {
+  expose: ['add'],
 });
 
 const result = await handlers.callTool({

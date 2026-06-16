@@ -36,8 +36,15 @@ export async function createQuickJSSandbox(): Promise<Sandbox> {
 		name: "quickjs-wasm",
 		async run(options: SandboxRunOptions): Promise<SandboxResult> {
 			const startedAt = Date.now();
+			const maxLogBytes = options.maxLogBytes ?? 64 * 1024;
 			const logs: string[] = [];
 			const calls: SandboxResult["calls"] = [];
+			const pushLog = (line: string) => {
+				logs.push(line);
+				if (new TextEncoder().encode(logs.join("\n")).byteLength > maxLogBytes) {
+					throw new Error(`sandbox logs exceed maxLogBytes (${maxLogBytes} bytes)`);
+				}
+			};
 
 			const toolsBridge: Record<string, (args?: Record<string, unknown>) => Promise<unknown>> = {};
 			for (const name of options.expose) {
@@ -86,10 +93,10 @@ export async function createQuickJSSandbox(): Promise<Sandbox> {
 						allowFetch: false,
 						allowFs: false,
 						console: {
-							log: (...args: unknown[]) => logs.push(args.map(stringify).join(" ")),
-							info: (...args: unknown[]) => logs.push(args.map(stringify).join(" ")),
-							warn: (...args: unknown[]) => logs.push(`[warn] ${args.map(stringify).join(" ")}`),
-							error: (...args: unknown[]) => logs.push(`[error] ${args.map(stringify).join(" ")}`),
+							log: (...args: unknown[]) => pushLog(args.map(stringify).join(" ")),
+							info: (...args: unknown[]) => pushLog(args.map(stringify).join(" ")),
+							warn: (...args: unknown[]) => pushLog(`[warn] ${args.map(stringify).join(" ")}`),
+							error: (...args: unknown[]) => pushLog(`[error] ${args.map(stringify).join(" ")}`),
 						},
 					},
 				);

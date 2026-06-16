@@ -44,6 +44,7 @@ const inputs: WrapInputs = {
 };
 
 withCodeMode(inputs, {
+	expose: ["echo", "add", "slugify"],
 	keepNative: ["fetch_user"], // pretend this one has side effects worth surfacing
 });
 

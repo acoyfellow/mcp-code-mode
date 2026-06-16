@@ -2,9 +2,9 @@
  * Node/Bun entry point for mcp-code-mode.
  *
  * `withCodeMode()` defaults to the disposable worker_threads sandbox.
- * `wrapServer()` adapts an MCP SDK Server in place. Runtime-neutral hosts such
- * as Cloudflare Workers should import `mcp-code-mode/core` and supply their own
- * Sandbox implementation.
+ * `wrapServer()` adapts an MCP SDK Server in place. Cloudflare Worker products
+ * should prefer the official `@cloudflare/codemode` runtime instead of adapting
+ * this Node-focused package.
  */
 import { createRequire } from "node:module";
 import { withCodeModeCore } from "./core.js";

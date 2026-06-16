@@ -44,6 +44,7 @@ export interface SandboxResult {
 export interface SandboxRunOptions {
 	code: string;
 	timeoutMs: number;
+	maxLogBytes?: number;
 	/** Tool names exposed inside the sandbox as `tools.<name>(args)`. */
 	expose: string[];
 	/** Bridge back to the parent process for `tools.*` calls. */
@@ -66,10 +67,15 @@ export type SearchHandler = (
 export interface WithCodeModeOptions {
 	/**
 	 * Which underlying tools become bindings inside `execute()`'s `tools` object.
-	 * Pass an array of exact names or a predicate. Defaults to: every tool except
-	 * those listed in `keepNative`.
+	 * Pass exact names or a predicate. Required unless `unsafeExposeAll` is true.
 	 */
 	expose?: ExposeFilter;
+
+	/**
+	 * Explicitly expose every underlying tool except `keepNative`. This is unsafe
+	 * for changing or third-party catalogs and exists only for trusted servers.
+	 */
+	unsafeExposeAll?: boolean;
 
 	/**
 	 * Tools that should remain top-level on the wrapped server, visible to the
@@ -84,9 +90,18 @@ export interface WithCodeModeOptions {
 	/**
 	 * Audit detail returned to the MCP client. `full` includes child arguments
 	 * and results; `metadata` keeps only tool name, status, and timing.
-	 * Defaults to `full` for backwards compatibility.
+	 * Defaults to `metadata`; opt into `full` only for non-sensitive tools.
 	 */
 	audit?: "full" | "metadata";
+
+	/** Per-execution resource budgets. */
+	limits?: {
+		maxToolCalls?: number;
+		maxConcurrentCalls?: number;
+		maxCodeBytes?: number;
+		maxLogBytes?: number;
+		maxResultBytes?: number;
+	};
 
 	/** Override the synthetic `search` tool or replace its catalog ranker. */
 	searchTool?: { name?: string; description?: string; handler?: SearchHandler };

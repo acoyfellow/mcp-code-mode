@@ -1,6 +1,6 @@
 # mcp-code-mode
 
-> Wrap any MCP server so it exposes `search` + `execute` instead of N tools. The agent writes JavaScript; the sandbox calls the tools.
+> Wrap a Node/Bun MCP server so it exposes `search` + `execute` instead of N eager tools. The agent writes JavaScript; a local worker or QuickJS sandbox calls an explicit tool allowlist.
 
 [![MIT](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 [![status: 0.0.1](https://img.shields.io/badge/status-0.0.1-black?style=for-the-badge)](#status)
@@ -11,8 +11,9 @@ round trips. Code-mode collapses that surface to two tools — a keyword
 `search` over the catalog, and an `execute` that runs JS in a sandbox where
 the underlying tools are `await tools.<name>(args)` bindings.
 
-This is a **library**, not a gateway. You install it in your MCP server, you
-flip two flags, and your server is now code-mode-shaped.
+This is a **Node/Bun server adapter**, not a gateway or a general hosted Code
+Mode runtime. Install it inside an MCP server you control; the server keeps its
+existing auth, dispatcher, and transport.
 
 ```ts
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -25,11 +26,16 @@ wrapServer(server, {
   listTools:  async () => myToolCatalog,
   callTool:   async (name, args) => myDispatch(name, args),
 }, {
-  keepNative: ["refresh_entity", "delete_thing"], // side-effects stay top-level
+  // Fail closed: only these methods exist inside guest JavaScript.
+  expose: ["search_catalog", "get_entity", "list_reports"],
+  // Consequential actions remain explicit top-level MCP calls.
+  keepNative: ["refresh_entity", "delete_thing"],
 });
 ```
 
-That's it. `tools/list` now returns `[search, execute, refresh_entity, delete_thing]`. Everything else is still callable from inside `execute()`.
+`tools/list` now returns `[search, execute, refresh_entity, delete_thing]`.
+Only the three explicitly exposed methods are callable inside `execute()`;
+unknown or newly added catalog tools fail closed.
 
 ## Quick start
 
@@ -59,12 +65,12 @@ native `create_note` tool.
 
 | Piece                          | What it does                                                                 |
 |--------------------------------|------------------------------------------------------------------------------|
-| `withCodeMode(inputs, opts)` | Node/Bun wrap with a default disposable-worker sandbox. |
-| `createCodeMode(inputs, opts)` | Runtime-neutral core for Workers, Deno, or a custom host-provided sandbox. |
-| `wrapServer(server, kit, opts)` | MCP SDK convenience wrapper; patches the Server in place. |
+| `wrapServer(server, kit, opts)` | Patch an MCP SDK `Server` in place. |
+| `withCodeMode(inputs, opts)` | Transport-independent Node/Bun registration path. |
 | `createWorkerSandbox()` | Default Node sandbox: disposable worker plus contextified VM. |
 | `createQuickJSSandbox()` | Optional separate-engine sandbox using QuickJS-WASM. |
 | `searchCatalog(tools, q)` | Weighted lexical ranker; replaceable through `searchTool.handler`. |
+| `mcp-code-mode/core` | Low-level structural core used by the Node adapter; not a Worker runtime. |
 
 ## What `execute()` actually runs
 
@@ -115,8 +121,7 @@ Those that don't still get a readable summary in `content[0].text`.
 
 ```ts
 wrapServer(server, toolkit, {
-  // Which tools become bindings inside execute()'s `tools` object.
-  // Default: everything except `keepNative`.
+  // Required allowlist: tools available inside execute().
   expose: ["search_catalog", "get_components", "get_users", /* ... */],
   // ...or a predicate:
   // expose: (name) => name.startsWith("get_") || name.startsWith("search_"),
@@ -128,8 +133,16 @@ wrapServer(server, toolkit, {
   // Swap the sandbox.
   sandbox: await createQuickJSSandbox(),
 
-  // Avoid duplicating sensitive or large child payloads in the receipt.
-  audit: "metadata", // default: "full"
+  // Metadata is the safe default. Opt into "full" only for non-sensitive data.
+  audit: "metadata",
+
+  limits: {
+    maxToolCalls: 100,
+    maxConcurrentCalls: 10,
+    maxCodeBytes: 64 * 1024,
+    maxLogBytes: 64 * 1024,
+    maxResultBytes: 1024 * 1024,
+  },
 
   // Tune the synthetic tools (or replace the tiny keyword ranker).
   searchTool:  {
@@ -148,27 +161,17 @@ wrapServer(server, toolkit, {
 | worker_threads + VM | ~5ms | host-managed | outer worker termination | none | First-party / agent-generated code |
 | QuickJS-WASM | ~25ms | engine-enforced | engine interrupt | optional dependencies | Untrusted code, strict boundaries |
 
-Both implement the same `Sandbox` interface. For a non-Node runtime, import the
-runtime-neutral entry and provide the host's executor:
+Both local implementations use the same structural `Sandbox` interface.
+`mcp-code-mode/core` remains available for adapters, but this project does not
+provide or claim a Cloudflare Worker runtime.
 
-```ts
-import { createCodeMode } from "mcp-code-mode/core";
+## Cloudflare Workers
 
-const handlers = createCodeMode(
-  { listTools, callTool },
-  {
-    sandbox: workerLoaderSandbox,
-    audit: "metadata",
-    // Prefer a positive read/composition allowlist when the upstream catalog
-    // does not provide reliable destructive-action annotations.
-    expose: (name) => readOnlyTools.has(name),
-  },
-);
-```
-
-`mcp-code-mode/core` bundles without Node built-ins; CI verifies this. A custom
-sandbox can use Worker Loaders, Deno, `isolated-vm`, or another capability
-boundary.
+Use the official experimental
+[`@cloudflare/codemode`](https://www.npmjs.com/package/@cloudflare/codemode)
+package for Worker Loader execution, MCP/OpenAPI connectors, approval-paused
+actions, durable replay/rollback logs, and snippets. This project complements
+that package for Node/Bun MCP servers; it does not replace it.
 
 ## Why a library and not a gateway
 
@@ -187,18 +190,17 @@ servers. Use this when you can.
 
 ## Operational limits
 
-- **Classify capabilities, not names.** `keepNative` is presentation policy, not
-  authorization. Prefer an explicit `expose` allowlist for read/composition
-  tools. Every underlying dispatcher must still authenticate, authorize, and
-  validate each call.
+- **Classify capabilities, not names.** `expose` is required. To expose a fully
+  trusted static catalog, the caller must explicitly set `unsafeExposeAll:
+  true`. `keepNative` is presentation policy, not authorization; every
+  underlying dispatcher must still authenticate, authorize, and validate.
 - **Timeout is not cancellation.** Terminating guest JavaScript cannot undo or
   abort a downstream tool call that already started. Keep writes, payments,
   notifications, deploys, and other consequential calls native unless the
   downstream API supplies its own cancellation/idempotency contract.
-- **Limit host concurrency.** The default creates one V8 worker per execution.
-  It is fast, but hundreds of simultaneous executions consume substantial
-  memory. Apply a queue/semaphore at the server boundary or use a pooled custom
-  sandbox.
+- **Budgets are local, not quotas.** The package bounds child-call count and
+  concurrency plus code/log/result bytes per execution. The default still
+  creates one V8 worker per execution; apply a host-level queue across requests.
 - **Return JSON.** Tool arguments, tool results, and the final value must be
   JSON-compatible. Cycles, functions, and BigInt values are rejected.
 
@@ -207,13 +209,13 @@ with `STRESS_CONCURRENCY=200 bun run stress`.
 
 ## Status
 
-`0.0.1`. The transport-agnostic wrapper, contextified worker sandbox, QuickJS
-sandbox, search, native-tool boundary, timeout path, audit envelope, and SDK
-convenience wrapper are covered by automated tests. The SDK test uses linked
-in-memory transports for a real initialize → tools/list → tools/call round trip.
-The stdio playground runs through MCP Inspector with `bun run play`.
+`0.0.1`, not yet published. Tests cover fail-closed exposure, execution
+budgets, worker and QuickJS boundaries, search, native tools, timeout, audit,
+and a real MCP SDK round trip. A clean packed tarball was also installed into a
+copy of the real Deja stdio MCP server and successfully composed `recall +
+inbox` while keeping all mutations native.
 
-Not yet on npm. Publish after the first downstream consumer lands the
-integration.
+Publish only after the packed-consumer proof is automated in CI and this narrow
+Node/Bun positioning has a second adopter.
 
 MIT. Built by [@acoyfellow](https://github.com/acoyfellow).

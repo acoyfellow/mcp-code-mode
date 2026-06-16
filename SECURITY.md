@@ -16,14 +16,17 @@ who controls that code:
   untrusted principal. It runs in a separate JavaScript engine with network and
   filesystem capabilities disabled.
 
-`keepNative` is a visibility and composition policy, not authorization. The
-wrapped MCP server must still authenticate requests, authorize every underlying
-tool call, validate arguments, and enforce resource limits. Guest timeout does
+`expose` is a required positive capability policy; a caller must deliberately
+set `unsafeExposeAll: true` to opt a trusted static catalog into default-open
+behavior. `keepNative` is visibility policy, not authorization. The wrapped MCP
+server must still authenticate requests, authorize every underlying tool call,
+validate arguments, and enforce server-level resource limits. Guest timeout does
 not cancel a downstream call that already started; expose consequential tools
 only when their own cancellation and idempotency contracts are sufficient.
-For catalogs containing sensitive or large data, use `audit: "metadata"` so the
-receipt retains names/status/timing without duplicating child arguments and
-results.
+The default `audit: "metadata"` retains names/status/timing without duplicating
+child arguments and results. Per-execution call/concurrency and byte budgets
+bound one guest program; operators must still limit concurrent executions across
+requests.
 
 ## Reporting a vulnerability
 

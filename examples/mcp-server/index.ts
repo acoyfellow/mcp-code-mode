@@ -127,6 +127,7 @@ wrapServer(
 		callTool,
 	},
 	{
+		expose: ["list_projects", "get_project", "find_notes", "get_project_notes", "slugify"],
 		keepNative: ["create_note"],
 	},
 );

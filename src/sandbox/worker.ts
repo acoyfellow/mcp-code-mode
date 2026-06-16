@@ -29,6 +29,7 @@ export function createWorkerSandbox(): Sandbox {
 }
 
 function runInWorker(options: SandboxRunOptions): Promise<SandboxResult> {
+	const maxLogBytes = options.maxLogBytes ?? 64 * 1024;
 	return new Promise((resolvePromise) => {
 		const startedAt = Date.now();
 		const logs: string[] = [];
@@ -71,6 +72,9 @@ function runInWorker(options: SandboxRunOptions): Promise<SandboxResult> {
 		worker.on("message", async (msg: WorkerMessage) => {
 			if (msg.kind === "log") {
 				logs.push(msg.line);
+				if (new TextEncoder().encode(logs.join("\n")).byteLength > maxLogBytes) {
+					finishError(new Error(`sandbox logs exceed maxLogBytes (${maxLogBytes} bytes)`));
+				}
 				return;
 			}
 			if (msg.kind === "call") {

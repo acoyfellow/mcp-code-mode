@@ -4,10 +4,10 @@ A wrapped MCP server, with one synthetic `search` tool, one synthetic `execute`
 tool, an optional pass-through list of "keep native" tools, and a sandbox
 behind `execute()` that brokers calls back to the underlying tool implementations.
 
-The package has two layers:
-
-- `mcp-code-mode/core` is runtime-neutral and requires a host-provided sandbox;
-- the main Node/Bun entry adds the default worker sandbox and MCP SDK adapter.
+The package is Node/Bun-focused. Its low-level `mcp-code-mode/core` entry keeps
+the catalog/policy logic structural, while the main entry adds the default
+worker sandbox and MCP SDK adapter. Cloudflare Worker products should use the
+official `@cloudflare/codemode` runtime.
 
 ```text
    ┌──────────────────────────┐         tools/list ──► [search, execute, ...keepNative]
@@ -80,7 +80,9 @@ Two orthogonal questions per tool:
 | Should the agent be able to call it inside JS chains? | `expose`              | not exposed            |
 | Should the agent see it as its own tool? | `keepNative`          | hidden behind `search` |
 
-Defaults: every tool is exposed inside `execute()`, nothing is kept native.
+The default is fail-closed: callers must provide `expose`, or deliberately opt a
+fully trusted static catalog into `unsafeExposeAll: true`. Audit receipts default
+to metadata-only.
 Most servers want to flip a small handful of write-side-effect tools into
 `keepNative` so the model reasons about them explicitly.
 

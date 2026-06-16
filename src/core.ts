@@ -36,6 +36,11 @@ const DEFAULTS = {
 		"Run JavaScript in an isolated sandbox. Underlying tools are reachable as `await tools.<name>(args)`. The return value of your top-level expression is sent back. `console.log` output is captured. No network, fs, or process access.",
 	defaultTimeoutMs: 15_000,
 	maxTimeoutMs: 60_000,
+	maxToolCalls: 100,
+	maxConcurrentCalls: 10,
+	maxCodeBytes: 64 * 1024,
+	maxLogBytes: 64 * 1024,
+	maxResultBytes: 1024 * 1024,
 };
 
 /**
@@ -49,7 +54,14 @@ export function createCodeMode(
 ): CodeModeHandlers {
 	const sandbox = options.sandbox;
 	const keepNative = new Set(options.keepNative ?? []);
-	const exposeFilter = makeExposeFilter(options.expose, keepNative);
+	const exposeFilter = makeExposeFilter(options.expose, options.unsafeExposeAll, keepNative);
+	const limits = {
+		maxToolCalls: positiveInteger(options.limits?.maxToolCalls, DEFAULTS.maxToolCalls),
+		maxConcurrentCalls: positiveInteger(options.limits?.maxConcurrentCalls, DEFAULTS.maxConcurrentCalls),
+		maxCodeBytes: positiveInteger(options.limits?.maxCodeBytes, DEFAULTS.maxCodeBytes),
+		maxLogBytes: positiveInteger(options.limits?.maxLogBytes, DEFAULTS.maxLogBytes),
+		maxResultBytes: positiveInteger(options.limits?.maxResultBytes, DEFAULTS.maxResultBytes),
+	};
 
 	const searchName = options.searchTool?.name ?? DEFAULTS.searchName;
 	const executeName = options.executeTool?.name ?? DEFAULTS.executeName;
@@ -111,7 +123,8 @@ export function createCodeMode(
 					executeName,
 					executeDefault,
 					executeMax,
-					options.audit ?? "full",
+					options.audit ?? "metadata",
+					limits,
 					args,
 				);
 			}
@@ -135,8 +148,18 @@ export function withCodeModeCore(inputs: WrapInputs, options: CoreCodeModeOption
 
 function makeExposeFilter(
 	expose: ExposeFilter | undefined,
+	unsafeExposeAll: boolean | undefined,
 	keepNative: Set<string>,
 ): (name: string) => boolean {
+	if (expose && unsafeExposeAll) {
+		throw new Error("Choose either `expose` or `unsafeExposeAll`, not both.");
+	}
+	if (!expose && !unsafeExposeAll) {
+		throw new Error(
+			"Code Mode is fail-closed: provide an explicit `expose` allowlist/predicate, " +
+				"or set `unsafeExposeAll: true` for a fully trusted catalog.",
+		);
+	}
 	if (!expose) return (name) => !keepNative.has(name);
 	if (Array.isArray(expose)) {
 		const set = new Set(expose);
@@ -182,9 +205,21 @@ async function handleExecute(
 	defaultTimeout: number,
 	maxTimeout: number,
 	audit: "full" | "metadata",
+	limits: {
+		maxToolCalls: number;
+		maxConcurrentCalls: number;
+		maxCodeBytes: number;
+		maxLogBytes: number;
+		maxResultBytes: number;
+	},
 	args: Record<string, unknown>,
 ): Promise<ToolCallResult> {
 	const code = String(args.code ?? "");
+	if (byteLength(code) > limits.maxCodeBytes) {
+		return errorResult(
+			`execute code exceeds maxCodeBytes (${limits.maxCodeBytes} bytes)`,
+		);
+	}
 	const rawTimeout = typeof args.timeout_ms === "number" ? args.timeout_ms : defaultTimeout;
 	const timeoutMs = Math.min(Math.max(rawTimeout, 100), maxTimeout);
 
@@ -192,23 +227,51 @@ async function handleExecute(
 	assertNoSyntheticCollisions(all, searchName, executeName);
 	const expose = all.filter((tool) => exposeFilter(tool.name)).map((tool) => tool.name);
 
+	let toolCalls = 0;
+	let activeCalls = 0;
+	let resultBytes = 0;
 	let result = await sandbox.run({
 		code,
 		timeoutMs,
+		maxLogBytes: limits.maxLogBytes,
 		expose,
 		invoke: async (tool, callArgs) => {
 			if (!exposeFilter(tool)) throw new Error(`Tool '${tool}' is not exposed inside execute().`);
-			const response = await inputs.callTool(tool, callArgs);
-			if (response.isError) {
-				const text = response.content?.find((item) => item.type === "text")?.text ?? "tool returned isError";
-				throw new Error(text);
+			toolCalls += 1;
+			if (toolCalls > limits.maxToolCalls) {
+				throw new Error(`tool call budget exceeded (${limits.maxToolCalls})`);
 			}
-			return response.structuredContent ?? response.content;
+			activeCalls += 1;
+			if (activeCalls > limits.maxConcurrentCalls) {
+				activeCalls -= 1;
+				throw new Error(`concurrent tool call budget exceeded (${limits.maxConcurrentCalls})`);
+			}
+			try {
+				const response = await inputs.callTool(tool, callArgs);
+				if (response.isError) {
+					const text = response.content?.find((item) => item.type === "text")?.text ?? "tool returned isError";
+					throw new Error(text);
+				}
+				const value = response.structuredContent ?? response.content;
+				resultBytes += jsonByteLength(value, `result from tool '${tool}'`);
+				if (resultBytes > limits.maxResultBytes) {
+					throw new Error(`cumulative tool result budget exceeded (${limits.maxResultBytes} bytes)`);
+				}
+				return value;
+			} finally {
+				activeCalls -= 1;
+			}
 		},
 	});
 
 	try {
 		result.value = toJsonCompatible(result.value, "execute return value");
+		if (jsonByteLength(result.value, "execute return value") > limits.maxResultBytes) {
+			throw new Error(`execute return value exceeds maxResultBytes (${limits.maxResultBytes} bytes)`);
+		}
+		if (byteLength(result.logs.join("\n")) > limits.maxLogBytes) {
+			throw new Error(`execute logs exceed maxLogBytes (${limits.maxLogBytes} bytes)`);
+		}
 		result.calls = result.calls.map((call) => ({
 			...call,
 			args: toJsonCompatible(call.args, `arguments for tool '${call.tool}'`) as Record<string, unknown>,
@@ -276,6 +339,35 @@ function assertNoSyntheticCollisions(
 				"Rename the synthetic tool with searchTool.name or executeTool.name.",
 		);
 	}
+}
+
+function positiveInteger(value: number | undefined, fallback: number): number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0
+		? Math.floor(value)
+		: fallback;
+}
+
+function byteLength(value: string): number {
+	return new TextEncoder().encode(value).byteLength;
+}
+
+function jsonByteLength(value: unknown, label: string): number {
+	const compatible = toJsonCompatible(value, label);
+	return byteLength(JSON.stringify(compatible) ?? "null");
+}
+
+function errorResult(message: string): ToolCallResult {
+	return {
+		isError: true,
+		structuredContent: {
+			logs: [],
+			calls: [],
+			error: { message },
+			timedOut: false,
+			durationMs: 0,
+		},
+		content: [{ type: "text", text: `ERROR: ${message}` }],
+	};
 }
 
 function stringify(value: unknown): string {
