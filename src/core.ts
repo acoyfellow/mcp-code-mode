@@ -111,6 +111,7 @@ export function createCodeMode(
 					executeName,
 					executeDefault,
 					executeMax,
+					options.audit ?? "full",
 					args,
 				);
 			}
@@ -180,6 +181,7 @@ async function handleExecute(
 	executeName: string,
 	defaultTimeout: number,
 	maxTimeout: number,
+	audit: "full" | "metadata",
 	args: Record<string, unknown>,
 ): Promise<ToolCallResult> {
 	const code = String(args.code ?? "");
@@ -223,17 +225,26 @@ async function handleExecute(
 		};
 	}
 
+	const calls = audit === "metadata"
+		? result.calls.map(({ tool, error, startedAt, durationMs }) => ({
+			tool,
+			error,
+			startedAt,
+			durationMs,
+		}))
+		: result.calls;
+
 	const summary: string[] = [];
 	if (result.error) summary.push(`ERROR: ${result.error.message}`);
 	if (result.timedOut) summary.push(`TIMED OUT after ${timeoutMs}ms`);
 	if (result.logs.length) summary.push(`--- console ---\n${result.logs.join("\n")}`);
-	if (result.calls.length) {
+	if (calls.length) {
 		summary.push(
-			`--- tool calls (${result.calls.length}) ---\n${result.calls
-				.map(
-					(call) =>
-						`${call.tool}(${shortJson(call.args)}) -> ${call.error ? `ERR ${call.error}` : "ok"} [${call.durationMs}ms]`,
-				)
+			`--- tool calls (${calls.length}) ---\n${calls
+				.map((call) => {
+					const argumentsSummary = "args" in call ? `(${shortJson(call.args)})` : "";
+					return `${call.tool}${argumentsSummary} -> ${call.error ? `ERR ${call.error}` : "ok"} [${call.durationMs}ms]`;
+				})
 				.join("\n")}`,
 		);
 	}
@@ -244,7 +255,7 @@ async function handleExecute(
 		structuredContent: {
 			value: result.value,
 			logs: result.logs,
-			calls: result.calls,
+			calls,
 			error: result.error,
 			timedOut: result.timedOut,
 			durationMs: result.durationMs,

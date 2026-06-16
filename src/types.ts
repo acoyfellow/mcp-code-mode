@@ -81,6 +81,13 @@ export interface WithCodeModeOptions {
 	/** Sandbox implementation. Defaults to the worker_threads sandbox. */
 	sandbox?: Sandbox;
 
+	/**
+	 * Audit detail returned to the MCP client. `full` includes child arguments
+	 * and results; `metadata` keeps only tool name, status, and timing.
+	 * Defaults to `full` for backwards compatibility.
+	 */
+	audit?: "full" | "metadata";
+
 	/** Override the synthetic `search` tool or replace its catalog ranker. */
 	searchTool?: { name?: string; description?: string; handler?: SearchHandler };
 

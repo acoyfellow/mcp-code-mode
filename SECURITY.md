@@ -21,6 +21,9 @@ wrapped MCP server must still authenticate requests, authorize every underlying
 tool call, validate arguments, and enforce resource limits. Guest timeout does
 not cancel a downstream call that already started; expose consequential tools
 only when their own cancellation and idempotency contracts are sufficient.
+For catalogs containing sensitive or large data, use `audit: "metadata"` so the
+receipt retains names/status/timing without duplicating child arguments and
+results.
 
 ## Reporting a vulnerability
 

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { createWorkerSandbox, searchCatalog, withCodeMode } from "../src/index.js";
-import type { ToolCallResult, ToolSchema, WrapInputs } from "../src/index.js";
+import type {
+	ToolCallResult,
+	ToolSchema,
+	WithCodeModeOptions,
+	WrapInputs,
+} from "../src/index.js";
 
 const tools: ToolSchema[] = [
 	{
@@ -24,7 +29,7 @@ function ok(value: unknown): ToolCallResult {
 	return { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value };
 }
 
-function harness() {
+function harness(options: WithCodeModeOptions = {}) {
 	let handlers!: Parameters<WrapInputs["register"]>[0];
 	withCodeMode(
 		{
@@ -39,7 +44,7 @@ function harness() {
 				handlers = registered;
 			},
 		},
-		{ keepNative: ["delete_record"] },
+		{ keepNative: ["delete_record"], ...options },
 	);
 	return handlers;
 }
@@ -96,6 +101,22 @@ describe("withCodeMode", () => {
 		expect(envelope.value).toEqual({ label: "answer", value: 42 });
 		expect(envelope.logs).toEqual(["answer 42"]);
 		expect(envelope.calls.map((call) => call.tool)).toEqual(["echo", "add"]);
+	});
+
+	test("metadata audit omits child arguments and results", async () => {
+		const result = await harness({ audit: "metadata" }).callTool({
+			params: {
+				name: "execute",
+				arguments: { code: `return tools.add({ a: 20, b: 22 });` },
+			},
+		});
+		const calls = (result.structuredContent as {
+			calls: Array<Record<string, unknown>>;
+		}).calls;
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({ tool: "add" });
+		expect(calls[0]).not.toHaveProperty("args");
+		expect(calls[0]).not.toHaveProperty("result");
 	});
 
 	test("kept-native tools cannot run inside execute", async () => {

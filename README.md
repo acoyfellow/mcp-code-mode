@@ -99,7 +99,7 @@ audited in the response envelope.
   structuredContent: {
     value:      unknown,                  // your top-level return
     logs:       string[],                 // captured console.*
-    calls:      { tool, args, result?, error?, durationMs }[],
+    calls:      { tool, args?, result?, error?, durationMs }[],
     error?:     { message, stack? },
     timedOut:   boolean,
     durationMs: number,
@@ -128,6 +128,9 @@ wrapServer(server, toolkit, {
   // Swap the sandbox.
   sandbox: await createQuickJSSandbox(),
 
+  // Avoid duplicating sensitive or large child payloads in the receipt.
+  audit: "metadata", // default: "full"
+
   // Tune the synthetic tools (or replace the tiny keyword ranker).
   searchTool:  {
     name: "find",
@@ -155,6 +158,7 @@ const handlers = createCodeMode(
   { listTools, callTool },
   {
     sandbox: workerLoaderSandbox,
+    audit: "metadata",
     // Prefer a positive read/composition allowlist when the upstream catalog
     // does not provide reliable destructive-action annotations.
     expose: (name) => readOnlyTools.has(name),
