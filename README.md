@@ -207,15 +207,31 @@ servers. Use this when you can.
 Run the repeatable local load probe with `bun run stress`; raise worker pressure
 with `STRESS_CONCURRENCY=200 bun run stress`.
 
+## Validated consumers
+
+The release gate installs the exact package tarball into clean temporary
+projects and drives separate real stdio MCP server processes.
+
+| Consumer | Composable methods | Native methods | Preserved contract |
+|---|---|---|---|
+| Deja-shaped memory server | `recall`, `inbox` | `remember` | Hidden reads compose; persistence stays explicit |
+| `firestore-mcp-kit@0.1.0` | `notes.get`, `notes.exists` | `notes.create`, `notes.update` | Zod validation and app-owned authorization survive wrapping |
+
+Run both with:
+
+```bash
+bun run prove:consumer
+bun run prove:firestore
+```
+
 ## Status
 
-`0.0.1`, not yet published. Tests cover fail-closed exposure, execution
-budgets, worker and QuickJS boundaries, search, native tools, timeout, audit,
-and a real MCP SDK round trip. A clean packed tarball was also installed into a
-copy of the real Deja stdio MCP server and successfully composed `recall +
-inbox` while keeping all mutations native.
+`0.0.1`, release-ready but not yet published. Tests cover fail-closed exposure,
+execution budgets, worker and QuickJS boundaries, search, native tools,
+timeout, audit, and a real MCP SDK round trip. `bun run verify` also installs
+the exact tarball into both clean consumer fixtures above.
 
-Publish only after the packed-consumer proof is automated in CI and this narrow
-Node/Bun positioning has a second adopter.
+The npm package name `mcp-code-mode` is currently available. Publication only
+requires an authenticated npm session.
 
 MIT. Built by [@acoyfellow](https://github.com/acoyfellow).
