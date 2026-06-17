@@ -37,6 +37,14 @@ wrapServer(server, {
 Only the three explicitly exposed methods are callable inside `execute()`;
 unknown or newly added catalog tools fail closed.
 
+## Install
+
+Until the npm package is published, install the exact GitHub Release tarball:
+
+```bash
+npm install https://github.com/acoyfellow/mcp-code-mode/releases/download/v0.0.1/mcp-code-mode-0.0.1.tgz
+```
+
 ## Quick start
 
 ```bash
@@ -231,7 +239,8 @@ execution budgets, worker and QuickJS boundaries, search, native tools,
 timeout, audit, and a real MCP SDK round trip. `bun run verify` also installs
 the exact tarball into both clean consumer fixtures above.
 
-The npm package name `mcp-code-mode` is currently available. Publication only
-requires an authenticated npm session.
+The npm package name `mcp-code-mode` is currently available. GitHub Release
+`v0.0.1` provides the same verified tarball until npm authentication is
+configured.
 
 MIT. Built by [@acoyfellow](https://github.com/acoyfellow).
