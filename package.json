@@ -64,6 +64,7 @@
     "demo": "bun examples/echo-server/index.ts",
     "stress": "bun run build && node bench/stress.mjs",
     "play": "npx --yes @modelcontextprotocol/inspector@0.22.0 bun examples/mcp-server/index.ts",
+    "prepare": "npm run build",
     "prepublishOnly": "bun run verify"
   },
   "peerDependencies": {
